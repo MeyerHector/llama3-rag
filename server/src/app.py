@@ -1,54 +1,159 @@
-from flask import Flask, request
-from langchain_ollama import OllamaLLM
+import os
+import gc
+from flask import Flask, request, Response, stream_with_context
+from langchain_ollama import ChatOllama
+from langchain_community.document_loaders import PDFPlumberLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
-from langchain_community.document_loaders import PDFPlumberLoader
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
+from langchain.prompts import PromptTemplate
+from langchain.chains import RetrievalQA
+import shutil
+import json
+
+os.environ["ALLOW_RESET"] = "TRUE"
+
 app = Flask(__name__)
-folder_path = "db"
+folder_path = "chroma_db_dir"
+pdf_folder = "./pdf"
 
-cached_llm = OllamaLLM(model="llama3")
+# Crear directorios si no existen
+os.makedirs(pdf_folder, exist_ok=True)
+os.makedirs(folder_path, exist_ok=True)
 
-embedding = FastEmbedEmbeddings()
+# Definir el modelo LLM
+llm = ChatOllama(model="llama3.2:1b")
 
-text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=1024, chunk_overlap=80, length_function=len, is_separator_regex=False
+# Definir el modelo de embeddings
+embed_model = FastEmbedEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+
+# Definir el prompt personalizado
+custom_prompt_template = """ Responde siempre en español. Usa la informacion proporcionada para encontrar la respuesta mas adecuada. Si no encuentras lo solicitado di que no tienes esa informacion
+
+Contexto: {context}
+Pregunta: {question}
+
+Respuesta:
+"""
+prompt = PromptTemplate(
+    template=custom_prompt_template,
+    input_variables=['context', 'question']
 )
 
-@app.route("/ai", methods=["POST"])
-def aiPost():
-    print("Post /ai called")
-    json_content = request.json
-    query = json_content.get("query")
-    return {"response": cached_llm.invoke(query)}
+# Variables globales para el chain de QA y el vector_store
+qa = None
+vector_store = None
 
+def stream_response(response):
+    for chunk in response:
+        # Asegurarse de que el chunk es una cadena o dict antes de codificarlo
+        if isinstance(chunk, dict):
+            yield json.dumps(chunk).encode('utf-8')
+        else:
+            yield str(chunk).encode('utf-8')
+
+# Ruta para subir y procesar el PDF
 @app.route("/pdf", methods=["POST"])
 def pdfPost():
+    global qa, vector_store
+    
+    # Verificar si se ha subido un archivo
+    if 'file' not in request.files:
+        return {"error": "No se ha subido ningún archivo"}, 400
+    
     file = request.files['file']
-    file_name = file.filename
-    save_file = "pdf/" + file_name
-    file.save(save_file)
-
-    print("filename: ", file_name)
-
-    loader = PDFPlumberLoader(save_file)
+    if file.filename == '':
+        return {"error": "El nombre del archivo está vacío"}, 400
     
-    docs = loader.load_and_split()
-    print (f"docs len={len(docs)}")
-    
-    chunks = text_splitter.split_documents(docs)
-    print (f"chunks len={len(chunks)}")
+    if file and file.filename.endswith(".pdf"):
+        try:
+            # Eliminar todos los archivos en ./pdf
+            for filename in os.listdir(pdf_folder):
+                file_path = os.path.join(pdf_folder, filename)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+            
+            # Eliminar el directorio de persistencia de Chroma si existe
+            if os.path.exists(folder_path):
+                try:
+                    # Cerrar y eliminar referencias a Chroma
+                    qa = None
+                    vector_store = None
+                    gc.collect()
+                    
+                    # Intentar eliminar el directorio
+                    shutil.rmtree(folder_path)
+                except Exception as e:
+                    print(f"Error al eliminar el directorio de Chroma: {e}")
+                    return {"error": "No se pudo procesar el PDF debido a un error interno al eliminar Chroma."}, 500
+        except Exception as e:
+            print(f"Error al eliminar archivos/directorio: {e}")
+            return {"error": "No se pudo procesar el PDF debido a un error interno."}, 500
 
-    vector_store = Chroma.from_documents(
-        documents=chunks, 
-        embedding=embedding,
-        persist_directory=folder_path
-        )
-    
-    vector_store.persist()
-    return {"status": "success", "filename": file_name, "doc_len": len(docs), "chunk_len": len(chunks)}
-def startup_app(): 
-    app.run(host="0.0.0.0", port=4000, debug=True)
+        try:
+            # Guardar nuevo PDF
+            save_file = os.path.join(pdf_folder, file.filename)
+            file.save(save_file)
+            print("Archivo subido:", file.filename)
+
+            # Cargar y procesar el PDF
+            loader = PDFPlumberLoader(save_file)
+            data_pdf = loader.load()
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1024, chunk_overlap=80)
+            chunks = text_splitter.split_documents(data_pdf)
+            print(f"Cantidad de chunks: {len(chunks)}")
+
+            # Crear y persistir el vector store
+            vector_store = Chroma.from_documents(
+                documents=chunks,
+                embedding=embed_model,
+                persist_directory=folder_path,
+                collection_name="chroma_collection"
+            )
+
+            # Crear el retriever y el chain de QA
+            retriever = vector_store.as_retriever(search_kwargs={'k': 5})
+            qa = RetrievalQA.from_chain_type(
+                llm=llm,
+                chain_type="stuff",
+                retriever=retriever,
+                return_source_documents=False,
+                chain_type_kwargs={'prompt': prompt}
+            )
+
+            return {"status": "success", "filename": file.filename, "chunk_len": len(chunks)}
+        except Exception as e:
+            print(f"Error al procesar el PDF: {e}")
+            return {"error": "No se pudo procesar el PDF debido a un error interno."}, 500
+    else:
+        return {"error": "El archivo debe ser un PDF"}, 400
+
+# Ruta para realizar consultas al PDF procesado con streaming
+@app.route("/ask-pdf", methods=["POST"])
+def askPdfPost():
+    global qa
+    if qa is None:
+        return {"error": "No se ha cargado ningún PDF. Por favor, sube un PDF primero."}, 400
+
+    data = request.get_json()
+    if not data or "query" not in data:
+        return {"error": "No se proporcionó ninguna pregunta"}, 400
+
+    query = data["query"]
+
+    def generate():
+        try:
+            response = qa.stream({"query": query})
+            for chunk in response:
+                if isinstance(chunk, dict):
+                    yield json.dumps(chunk).encode('utf-8')
+                else:
+                    yield str(chunk).encode('utf-8')
+        except Exception as e:
+            error_message = json.dumps({"error": "Error al procesar la consulta."}).encode('utf-8')
+            yield error_message
+
+    return Response(stream_with_context(generate()), mimetype='application/json')
 
 if __name__ == "__main__":
-    startup_app()
+    app.run(debug=True)
