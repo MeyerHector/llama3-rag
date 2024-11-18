@@ -1,16 +1,54 @@
 import { useState } from "react";
+import { FaFileAlt, FaArrowUp } from "react-icons/fa";
 
 function App() {
   const [query, setQuery] = useState("");
   const [response, setResponse] = useState("");
   const [loading, setLoading] = useState(false);
+  const [file, setFile] = useState(null);
+  const [uploadResponse, setUploadResponse] = useState("");
+
+  const handleFileChange = (e) => {
+    setFile(e.target.files[0]);
+  };
+
+  const handleFileUpload = async (e) => {
+    e.preventDefault();
+    if (!file) {
+      alert("Por favor selecciona un archivo PDF.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      setLoading(true);
+      const res = await fetch("http://localhost:5000/pdf", {
+        method: "POST",
+        body: formData,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUploadResponse(`Archivo subido: ${data.filename}, chunks procesados: ${data.chunk_len}`);
+      } else {
+        const errorData = await res.json();
+        setUploadResponse(`Error: ${errorData.error}`);
+      }
+    } catch (error) {
+      console.error("Error al subir el archivo:", error);
+      setUploadResponse("Error al subir el archivo.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
 
     try {
-      const res = await fetch("http://localhost:4000/ai", {
+      const res = await fetch("http://localhost:5000/ask-pdf", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -20,7 +58,7 @@ function App() {
 
       if (res.ok) {
         const data = await res.json();
-        setResponse(data.response);
+        setResponse(data.result);
       } else {
         console.error("Error al hacer la solicitud:", res.statusText);
       }
@@ -34,7 +72,30 @@ function App() {
   return (
     <div style={styles.container}>
       <div style={styles.card}>
-        <h1 style={styles.title}>Consulta a la IA</h1>
+        <h1 style={styles.title}>Carga y Consulta IA</h1>
+
+        <form onSubmit={handleFileUpload} style={styles.form}>
+          <div style={styles.fileInputWrapper}>
+            <input
+              type="file"
+              accept=".pdf"
+              onChange={handleFileChange}
+              style={styles.fileInput}
+              id="fileInput"
+            />
+            <label htmlFor="fileInput" style={styles.fileInputLabel}>
+              <FaFileAlt style={{ marginRight: 7 }} />
+              Seleccionar PDF
+            </label>
+          </div>
+          <button type="submit" style={styles.button}>
+            <FaArrowUp style={{ marginRight: 7 }} />
+            Subir PDF
+          </button>
+        </form>
+
+        {uploadResponse && <p style={styles.responseText}>{uploadResponse}</p>}
+
         <form onSubmit={handleSubmit} style={styles.form}>
           <textarea
             value={query}
@@ -44,14 +105,14 @@ function App() {
             style={styles.textarea}
           />
           <button type="submit" style={styles.button}>
-            Enviar
+            Enviar Consulta
           </button>
         </form>
 
         {loading && (
           <div style={styles.loadingContainer}>
             <div style={styles.spinner}></div>
-            <p style={styles.loadingText}>Procesando tu pregunta...</p>
+            <p style={styles.loadingText}>Procesando...</p>
           </div>
         )}
 
@@ -68,112 +129,111 @@ function App() {
 
 const styles = {
   container: {
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-    height: "100vh",
-    backgroundColor: "#f4f7fc",
-    padding: "20px",
-    boxSizing: "border-box",
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    minHeight: '100vh',
+    backgroundColor: '#f0f2f5',
+    padding: '20px',
   },
   card: {
-    backgroundColor: "#fff",
-    padding: "30px",
-    borderRadius: "10px",
-    boxShadow: "0 4px 10px rgba(0, 0, 0, 0.1)",
-    maxWidth: "600px",
-    width: "100%",
-    boxSizing: "border-box",
-    overflow: "hidden",
-    wordWrap: "break-word",
+    backgroundColor: '#ffffff',
+    borderRadius: '12px',
+    boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+    padding: '40px',
+    width: '100%',
+    maxWidth: '600px',
   },
   title: {
-    fontFamily: "'Roboto', sans-serif",
-    fontSize: "2rem",
-    color: "#333",
-    marginBottom: "20px",
-    textAlign: "center",
+    fontSize: '28px',
+    fontWeight: 'bold',
+    color: '#333',
+    textAlign: 'center',
+    marginBottom: '30px',
   },
   form: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "10px",
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '20px',
+    marginBottom: '30px',
   },
-  textarea: {
-    padding: "12px",
-    borderRadius: "8px",
-    border: "1px solid #ddd",
-    fontSize: "1rem",
-    fontFamily: "'Roboto', sans-serif",
-    outline: "none",
-    transition: "border 0.3s ease",
-    resize: "vertical",
-    minHeight: "100px",
-    boxSizing: "border-box",
+  fileInputWrapper: {
+    position: 'relative',
+    overflow: 'hidden',
+    display: 'inline-block',
+    maxWidth: '200px',
+  },
+  fileInput: {
+    fontSize: '100px',
+    position: 'absolute',
+    left: '0',
+    top: '0',
+    opacity: '0',
+  },
+  fileInputLabel: {
+    display: 'inline-block',
+    padding: '10px 20px',
+    backgroundColor: '#4CAF50',
+    color: 'white',
+    borderRadius: '5px',
+    cursor: 'pointer',
+    transition: 'background-color 0.3s',
   },
   button: {
-    padding: "12px 20px",
-    border: "none",
-    backgroundColor: "#4e89f1",
-    color: "#fff",
-    fontSize: "1rem",
-    fontWeight: "bold",
-    borderRadius: "8px",
-    cursor: "pointer",
-    transition: "background-color 0.3s ease, transform 0.3s ease",
-    boxSizing: "border-box",
+    padding: '12px 24px',
+    backgroundColor: '#007bff',
+    color: 'white',
+    border: 'none',
+    borderRadius: '5px',
+    fontSize: '16px',
+    cursor: 'pointer',
+    transition: 'background-color 0.3s',
+    width: '100%', // Add this line to make the button width 100%
+  },
+  textarea: {
+    width: '96%', // Change this line to make the textarea width 100%
+    padding: '12px',
+    borderRadius: '5px',
+    border: '1px solid #ddd',
+    fontSize: '16px',
+    resize: 'vertical',
   },
   loadingContainer: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: "20px",
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: '20px',
   },
   spinner: {
-    border: "4px solid #f3f3f3",
-    borderTop: "4px solid #4e89f1",
-    borderRadius: "50%",
-    width: "30px",
-    height: "30px",
-    animation: "spin 2s linear infinite",
+    border: '3px solid #f3f3f3',
+    borderTop: '3px solid #3498db',
+    borderRadius: '50%',
+    width: '30px',
+    height: '30px',
+    animation: 'spin 1s linear infinite',
   },
   loadingText: {
-    marginLeft: "10px",
-    fontSize: "1rem",
-    color: "#666",
+    marginLeft: '15px',
+    fontSize: '18px',
+    color: '#666',
   },
   responseContainer: {
-    marginTop: "20px",
-    padding: "15px",
-    backgroundColor: "#f9f9f9",
-    borderRadius: "8px",
-    boxShadow: "0 2px 5px rgba(0, 0, 0, 0.1)",
-    overflowWrap: "break-word",
-    maxHeight: "300px",
-    overflowY: "auto",
+    marginTop: '30px',
+    padding: '20px',
+    backgroundColor: '#f8f9fa',
+    borderRadius: '8px',
   },
   responseTitle: {
-    fontSize: "1.5rem",
-    color: "#333",
-    marginBottom: "10px",
+    fontSize: '22px',
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: '15px',
   },
   responseText: {
-    fontSize: "1rem",
-    color: "#555",
-    lineHeight: "1.5",
-    wordWrap: "break-word",
+    fontSize: '16px',
+    color: '#333',
+    lineHeight: '1.6',
   },
 };
-
-const styleSheet = document.styleSheets[0];
-styleSheet.insertRule(
-  `
-  @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-  }
-`,
-  styleSheet.cssRules.length
-);
 
 export default App;
