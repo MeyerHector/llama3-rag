@@ -45,6 +45,10 @@ function App() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!file) {
+      alert("Por favor sube un archivo PDF antes de hacer una consulta.");
+      return;
+    }
     setLoading(true);
   
     try {
@@ -57,14 +61,12 @@ function App() {
       });
   
       if (!res.ok) {
-        // Si el backend responde con error, intenta leer el mensaje del error
         const errorData = await res.json();
         console.error("Error al hacer la solicitud:", errorData);
         setResponse(`Error: ${errorData.message || "Error desconocido"}`);
         return;
       }
   
-      // Si la respuesta es exitosa
       const data = await res.json();
       if (data.result) {
         setResponse(data.result);
@@ -199,10 +201,10 @@ const styles = {
     fontSize: '16px',
     cursor: 'pointer',
     transition: 'background-color 0.3s',
-    width: '100%', // Add this line to make the button width 100%
+    width: '100%', 
   },
   textarea: {
-    width: '96%', // Change this line to make the textarea width 100%
+    width: '96%', 
     padding: '12px',
     borderRadius: '5px',
     border: '1px solid #ddd',
