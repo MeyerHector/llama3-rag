@@ -46,7 +46,7 @@ function App() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
-
+  
     try {
       const res = await fetch("http://localhost:5000/ask-pdf", {
         method: "POST",
@@ -55,19 +55,30 @@ function App() {
         },
         body: JSON.stringify({ query }),
       });
-
-      if (res.ok) {
-        const data = await res.json();
+  
+      if (!res.ok) {
+        // Si el backend responde con error, intenta leer el mensaje del error
+        const errorData = await res.json();
+        console.error("Error al hacer la solicitud:", errorData);
+        setResponse(`Error: ${errorData.message || "Error desconocido"}`);
+        return;
+      }
+  
+      // Si la respuesta es exitosa
+      const data = await res.json();
+      if (data.result) {
         setResponse(data.result);
       } else {
-        console.error("Error al hacer la solicitud:", res.statusText);
+        setResponse("No se recibió una respuesta válida.");
       }
     } catch (error) {
       console.error("Error al hacer la solicitud:", error);
+      setResponse("Hubo un error al procesar tu consulta.");
     } finally {
       setLoading(false);
     }
   };
+  
 
   return (
     <div style={styles.container}>
